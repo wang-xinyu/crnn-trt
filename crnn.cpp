@@ -35,8 +35,24 @@ int ks[] = {3, 3, 3, 3, 3, 3, 2};
 int ps[] = {1, 1, 1, 1, 1, 1, 0};
 int ss[] = {1, 1, 1, 1, 1, 1, 1};
 int nm[] = {64, 128, 256, 256, 512, 512, 512};
+const std::string alphabet = "-0123456789abcdefghijklmnopqrstuvwxyz";
 
 using namespace nvinfer1;
+
+std::string strDecode(std::vector<int>& preds, bool raw) {
+    std::string str;
+    if (raw) {
+        for (auto v: preds) {
+            str.push_back(alphabet[v]);
+        }
+    } else {
+        for (size_t i = 0; i < preds.size(); i++) {
+            if (preds[i] == 0 || (i > 0 && preds[i - 1] == preds[i])) continue;
+            str.push_back(alphabet[preds[i]]);
+        }
+    }
+    return str;
+}
 
 // TensorRT weight files have a simple space delimited format:
 // [type] [size] <data x size in hex>
@@ -202,7 +218,6 @@ ICudaEngine* createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilder
     assert(data);
 
     std::map<std::string, Weights> weightMap = loadWeights("../crnn.wts");
-    Weights emptywts{DataType::kFLOAT, nullptr, 0};
 
     // cnn
     auto x = convRelu(network, weightMap, *data, 0);
@@ -355,25 +370,29 @@ int main(int argc, char** argv) {
     cudaStream_t stream;
     CHECK(cudaStreamCreate(&stream));
 
-    //cv::Mat img = cv::imread(std::string(argv[2]) + "/" + file_names[f - fcount + 1 + b]);
-    //cv::Mat pr_img = preprocess_img(img); // letterbox BGR to RGB
-    //int i = 0;
-    //for (int row = 0; row < INPUT_H; ++row) {
-    //    uchar* uc_pixel = pr_img.data + row * pr_img.step;
-    //    for (int col = 0; col < INPUT_W; ++col) {
-    //        data[b * 3 * INPUT_H * INPUT_W + i] = (float)uc_pixel[2] / 255.0;
-    //        data[b * 3 * INPUT_H * INPUT_W + i + INPUT_H * INPUT_W] = (float)uc_pixel[1] / 255.0;
-    //        data[b * 3 * INPUT_H * INPUT_W + i + 2 * INPUT_H * INPUT_W] = (float)uc_pixel[0] / 255.0;
-    //        uc_pixel += 3;
-    //        ++i;
-    //    }
-    //}
+    cv::Mat img = cv::imread("demo.png");
+    cv::cvtColor(img, img, CV_BGR2GRAY);
+    cv::resize(img, img, cv::Size(INPUT_W, INPUT_H));
+    for (int i = 0; i < INPUT_H * INPUT_W; i++) {
+        data[i] = ((float)img.at<uchar>(i) / 255.0 - 0.5) * 2.0;
+    }
 
     // Run inference
     auto start = std::chrono::system_clock::now();
     doInference(*context, stream, buffers, data, prob, BATCH_SIZE);
     auto end = std::chrono::system_clock::now();
     std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms" << std::endl;
+
+    std::vector<int> preds;
+    for (int i = 0; i < 26; i++) {
+        int maxj = 0;
+        for (int j = 1; j < 37; j++) {
+            if (prob[37 * i + j] > prob[37 * i + maxj]) maxj = j;
+        }
+        preds.push_back(maxj);
+    }
+    std::cout << "raw: " << strDecode(preds, true) << std::endl;
+    std::cout << "sim: " << strDecode(preds, false) << std::endl;
 
 
     // Release stream and buffers
@@ -386,13 +405,13 @@ int main(int argc, char** argv) {
     runtime->destroy();
 
     // Print histogram of the output distribution
-    std::cout << "\nOutput:\n\n";
-    for (unsigned int i = 0; i < OUTPUT_SIZE; i++)
-    {
-        std::cout << prob[i] << ", ";
-        if (i % 10 == 0) std::cout << std::endl;
-    }
-    std::cout << std::endl;
+    //std::cout << "\nOutput:\n\n";
+    //for (unsigned int i = 0; i < OUTPUT_SIZE; i++)
+    //{
+    //    std::cout << prob[i] << ", ";
+    //    if (i % 10 == 0) std::cout << std::endl;
+    //}
+    //std::cout << std::endl;
 
     return 0;
 }
